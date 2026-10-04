@@ -216,14 +216,6 @@ target_link_options(HybridFirmwareModeProbe PRIVATE -static -static-libgcc -stat
 add_test(NAME HybridFirmwareModeProbe COMMAND HybridFirmwareModeProbe
     $<TARGET_FILE:Mu2026Hybrid> $<TARGET_FILE:MockMuEngine>)
 
-add_library(MockMuEngine SHARED Tests/MockMuEngine.cpp)
-target_link_options(MockMuEngine PRIVATE -static -static-libgcc -static-libstdc++)
-add_executable(HybridFirmwareModeProbe Tests/HybridFirmwareModeProbe.cpp)
-target_compile_definitions(HybridFirmwareModeProbe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_options(HybridFirmwareModeProbe PRIVATE -static -static-libgcc -static-libstdc++)
-add_test(NAME HybridFirmwareModeProbe COMMAND HybridFirmwareModeProbe
-    $<TARGET_FILE:Mu2026Hybrid> $<TARGET_FILE:MockMuEngine>)
-
 add_executable(MuVoiceCatalogTests
     Tests/MuVoiceCatalogTests.cpp
     Source/MuVoiceCatalog.cpp
