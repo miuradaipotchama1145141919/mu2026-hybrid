@@ -20,6 +20,7 @@
 // This may not be present on MSVC.
 // See http://stackoverflow.com/questions/126279/c99-stdint-h-header-and-ms-visual-studio
 #include <stdint.h>
+#include <algorithm>
 
 // TODO(raph): move from fixed to variable N
 #define LG_N 6
@@ -41,15 +42,10 @@
 #define SynthMemoryBarrier()
 #endif
 
-template<typename T>
-inline static T min(const T& a, const T& b) {
-    return a < b ? a : b;
-}
-
-template<typename T>
-inline static T max(const T& a, const T& b) {
-    return a > b ? a : b;
-}
+// Use the standard min/max. A custom global template here becomes ambiguous
+// with std::min/std::max once <algorithm> is pulled in (e.g. via <cmath> on GCC 16).
+using std::min;
+using std::max;
 
 #ifdef __aarch64__
 #define HAVE_NEON_INTRINSICS
