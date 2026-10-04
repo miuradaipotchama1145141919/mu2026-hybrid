@@ -52,4 +52,39 @@ int main()
     allocator.releaseChannel(0);
     assert(!allocator.active(0));
     assert(allocator.channel(0) == 0);
+
+    allocator.reset();
+    assert(allocator.noteOn(0, 60).voice == 0);
+    assert(allocator.noteOn(0, 64).voice == 0);
+    assert(allocator.holds(0, 60));
+    assert(allocator.holds(0, 64));
+    assert(!allocator.holds(0, 65));
+    assert(!allocator.holds(1, 60));
+    assert(allocator.noteOff(0, 64) == 0);
+    assert(allocator.holds(0, 60));
+    assert(!allocator.holds(0, 64));
+    assert(allocator.active(0));
+    assert(allocator.noteOff(0, 60) == 0);
+    assert(!allocator.holds(0, 60));
+    assert(!allocator.active(0));
+
+    allocator.reset();
+    assert(allocator.noteOn(0, 60).voice == 0);
+    assert(allocator.noteOn(0, 60).voice == 0);
+    assert(allocator.noteOff(0, 60) == 0);
+    assert(allocator.holds(0, 60));
+    assert(allocator.noteOff(0, 60) == 0);
+    assert(!allocator.holds(0, 60));
+
+    allocator.reset();
+    assert(allocator.configureVoice(2, 4));
+    assert(allocator.configureVoice(5, 4));
+    assert(allocator.noteOn(4, 60).voice == 2);
+    assert(allocator.noteOn(4, 64).voice == 5);
+    assert(allocator.holds(2, 60));
+    assert(!allocator.holds(2, 64));
+    assert(allocator.holds(5, 64));
+    assert(allocator.noteOn(4, 67).voice == 2);
+    assert(!allocator.holds(2, 60));
+    assert(allocator.holds(2, 67));
 }

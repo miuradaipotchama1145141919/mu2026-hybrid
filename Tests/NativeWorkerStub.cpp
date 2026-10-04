@@ -5,12 +5,13 @@
 #include <cstdint>
 #include <algorithm>
 #include <array>
+#include <cwchar>
 
 namespace {
 
 HANDLE parseHandle(const wchar_t* text)
 {
-    return reinterpret_cast<HANDLE>(_wcstoui64(text, nullptr, 10));
+    return reinterpret_cast<HANDLE>(std::wcstoull(text, nullptr, 10));
 }
 
 } // namespace

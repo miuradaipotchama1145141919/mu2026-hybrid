@@ -44,5 +44,33 @@ int main()
            "unrouted channel note remains in XG");
     expect(!hybrid::sgOwnsNote(0x00075bb0, 0x0001),
            "controllers continue to XG");
+
+    expect(hybrid::isSgBankSelect(0x006200b0), "bank MSB 98 selects SG");
+    expect(hybrid::isSgBankSelect(0x006200b3), "bank MSB 98 on channel 4");
+    expect(hybrid::isSgBankSelect(0x005200b0), "bank MSB 82 selects SG");
+    expect(hybrid::isSgBankSelect(0x005200b5), "bank MSB 82 on channel 6");
+    expect(!hybrid::isSgBankSelect(0x002100b0), "VL bank MSB 33 is not SG");
+    expect(!hybrid::isSgBankSelect(0x005100b0), "VL bank MSB 81 is not SG");
+    expect(!hybrid::isSgBankSelect(0x006100b0), "VL bank MSB 97 is not SG");
+    expect(!hybrid::isSgBankSelect(0x000062b0), "CC 98 value 0 is not SG");
+    expect(!hybrid::isSgBankSelect(0x006220b0), "bank LSB is not SG");
+    expect(!hybrid::isSgBankSelect(0x000062c0), "program change is not SG");
+
+    auto mask = hybrid::updateSgBankMask(0x006200b0, 0);
+    expect(mask == 0x0001, "SG bank sets its channel bit");
+    mask = hybrid::updateSgBankMask(0x006200b3, mask);
+    expect(mask == 0x0009, "second SG channel is added");
+    mask = hybrid::updateSgBankMask(0x005200b5, mask);
+    expect(mask == 0x0029, "MSB 82 also adds its channel");
+    mask = hybrid::updateSgBankMask(0x000000b5, mask);
+    expect(mask == 0x0009, "leaving MSB 82 clears the channel bit");
+    mask = hybrid::updateSgBankMask(0x000000b0, mask);
+    expect(mask == 0x0008, "leaving the SG bank clears the channel bit");
+    expect(hybrid::updateSgBankMask(0x00075bb0, mask) == mask,
+           "other controllers leave the mask alone");
+    expect(hybrid::updateSgBankMask(0x000005c3, mask) == mask,
+           "program change leaves the mask alone");
+    expect(hybrid::updateSgBankMask(0x00643c93, mask) == mask,
+           "notes leave the mask alone");
     return failures == 0 ? 0 : 1;
 }

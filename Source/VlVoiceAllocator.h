@@ -59,8 +59,9 @@ public:
         };
         slot.channel = channel;
         slot.note = note;
-        slot.active = true;
         slot.heldNotes = {};
+        slot.heldNotes[note] = 1;
+        slot.active = true;
         slot.age = ++clock;
         return result;
     }
@@ -81,14 +82,23 @@ public:
         auto oldest = std::numeric_limits<std::uint64_t>::max();
         for (std::size_t voice = 0; voice < slots.size(); ++voice) {
             const auto& slot = slots[voice];
-            if (slot.active && slot.channel == channel && slot.note == note
-                && slot.age < oldest) {
+            if (slot.active && slot.channel == channel
+                && slot.heldNotes[note] != 0 && slot.age < oldest) {
                 found = voice;
                 oldest = slot.age;
             }
         }
-        if (found != noVoice)
-            slots[found].active = false;
+        if (found != noVoice) {
+            auto& slot = slots[found];
+            --slot.heldNotes[note];
+            slot.active = false;
+            for (const auto count : slot.heldNotes) {
+                if (count != 0) {
+                    slot.active = true;
+                    break;
+                }
+            }
+        }
         return found;
     }
 
@@ -105,6 +115,12 @@ public:
     [[nodiscard]] bool hasExplicitConfiguration() const noexcept
     {
         return configured;
+    }
+
+    [[nodiscard]] bool holds(std::size_t voice, std::uint8_t note) const noexcept
+    {
+        return voice < slots.size() && note < 128
+            && slots[voice].active && slots[voice].heldNotes[note] != 0;
     }
 
     void release(std::size_t voice) noexcept

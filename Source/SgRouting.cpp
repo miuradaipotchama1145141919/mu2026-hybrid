@@ -18,4 +18,21 @@ bool sgOwnsNote(std::uint32_t packedMessage,
     return (routeMask & (std::uint32_t {1} << channel)) != 0;
 }
 
+bool isSgBankSelect(std::uint32_t packedMessage) noexcept
+{
+    return (packedMessage & 0xf0) == 0xb0
+        && ((packedMessage >> 8) & 0x7f) == 0
+        && isSgBankMsb(static_cast<std::uint8_t>((packedMessage >> 16) & 0x7f));
+}
+
+std::uint32_t updateSgBankMask(std::uint32_t packedMessage,
+                               std::uint32_t routeMask) noexcept
+{
+    if ((packedMessage & 0xf0) != 0xb0 || ((packedMessage >> 8) & 0x7f) != 0)
+        return routeMask;
+    const auto bit = std::uint32_t {1} << (packedMessage & 0x0f);
+    return isSgBankSelect(packedMessage) ? (routeMask | bit)
+                                         : (routeMask & ~bit);
+}
+
 } // namespace hybrid

@@ -3,6 +3,7 @@
 #include "AnEngine.h"
 #include "HybridEditor.h"
 #include "HybridStatus.h"
+#include "MidiPortCable.h"
 #include "MidiRouter.h"
 #include "MidiSystemReset.h"
 #include "MuVoiceCatalog.h"
@@ -17,6 +18,7 @@
 #include "StreamingRateAdapter.h"
 #include "VlPartRouter.h"
 #include "VlPluginVoiceBulk.h"
+#include "VlHeldNoteStack.h"
 #include "VlVoiceAllocator.h"
 #include "Vst2Abi.h"
 #include "XgPartModes.h"
@@ -149,6 +151,7 @@ struct VlVoiceState {
     bool prepared {};
     bool started {};
     bool disabled {};
+    hybrid::VlHeldNoteStack heldNotes;
 };
 
 struct SgState {
@@ -184,6 +187,7 @@ struct WrapperState {
     hybrid::VlPluginVoiceBulk vlPluginVoiceBulk;
     SgState sg;
     hybrid::MidiRouter router;
+    hybrid::MidiPortCable midiCable;
     hybrid::GsEffectTranslator gsEffectTranslator;
     hybrid::XgVariationRouting variationRouting;
     hybrid::MuInsertionRouting insertionRouting;
@@ -470,6 +474,7 @@ void clearVlVoice(VlVoiceState& voice)
     voice.prepared = false;
     voice.started = false;
     voice.disabled = false;
+    voice.heldNotes.clear();
     voice.client.reset();
 }
 
@@ -523,6 +528,7 @@ void resetVlPlaybackState(WrapperState& wrapper)
         voice.timelineFrame = nativeFrame(wrapper, wrapper.sgTimelineFrames);
         voice.prepared = false;
         voice.started = false;
+        voice.heldNotes.clear();
     }
     for (auto& snapshot : wrapper.vlChannelSnapshots)
         snapshot.reset();
@@ -914,6 +920,43 @@ void replaySgSetup(WrapperState& wrapper, std::uint64_t triggerFrame)
         wrapper.sg.timelineFrame = std::max(position, nativeTrigger);
 }
 
+void trackSgBank(WrapperState& wrapper, std::uint32_t packed,
+                 std::uint64_t eventFrame)
+{
+    std::uint32_t routeMask = wrapper.sg.routeMask;
+    if (wrapper.sg.client == nullptr) {
+        if (!hybrid::isSgBankSelect(packed))
+            return;
+        try {
+            reportSgDiagnostic("bank select", wrapper.sgAvailable,
+                               wrapper.sg.routeMask);
+            if (ensureSg(wrapper) == nullptr)
+                return;
+            replaySgSetup(wrapper, eventFrame);
+            wrapper.sgSetupHistoryFrozen = true;
+            routeMask = 0;
+            for (std::size_t index = 0; index < wrapper.sgSetupEventCount;
+                 ++index) {
+                const auto& event = wrapper.sgSetupEvents[index];
+                if (event.kind == VlSetupKind::shortMessage)
+                    routeMask = hybrid::updateSgBankMask(event.value, routeMask);
+            }
+        } catch (const std::exception& error) {
+            disableSg(wrapper, "bank select failure", error.what());
+            return;
+        } catch (...) {
+            disableSg(wrapper, "bank select failure");
+            return;
+        }
+    }
+    routeMask = hybrid::updateSgBankMask(packed, routeMask);
+    if (routeMask == wrapper.sg.routeMask)
+        return;
+    wrapper.sg.routeMask = routeMask;
+    wrapper.status.setSgRouteMask(routeMask);
+    reportSgDiagnostic("configured", wrapper.sgAvailable, routeMask);
+}
+
 void queueVl(WrapperState& wrapper, VlVoiceState& voice,
              std::int32_t deltaFrames, std::uint32_t message)
 {
@@ -1111,6 +1154,21 @@ vst2::IntPtr processEvents(WrapperState& wrapper, const vst2::Events* events)
         for (std::int32_t index = 0; index < events->numEvents; ++index) {
             auto* event = events->events[index];
             bool sendToChild = true;
+            if (event != nullptr && (event->type == 1 || event->type == 6)) {
+                bool cableSelector = false;
+                if (event->type == 1) {
+                    const auto* gateMidi =
+                        reinterpret_cast<const vst2::MidiEvent*>(event);
+                    cableSelector = wrapper.midiCable.observe(
+                        static_cast<std::uint8_t>(gateMidi->midiData[0]),
+                        static_cast<std::uint8_t>(gateMidi->midiData[1]));
+                }
+                if (cableSelector || !wrapper.midiCable.isPrimary()) {
+                    retainChildEvent(wrapper, event, firstChildEvent);
+                    firstChildEvent = false;
+                    continue;
+                }
+            }
             if (event != nullptr && event->type == 1) {
                 const auto* midi = reinterpret_cast<const vst2::MidiEvent*>(event);
                 const auto packed = packedMessage(*midi);
@@ -1187,6 +1245,7 @@ vst2::IntPtr processEvents(WrapperState& wrapper, const vst2::Events* events)
                         wrapper.status.setSupplementalEngineAvailable(false);
                     }
                 }
+                trackSgBank(wrapper, packed, eventFrame);
                 if (wrapper.sg.client == nullptr
                     && !wrapper.sgSetupHistoryFrozen
                     && !hybrid::sgOwnsNote(packed, 0xffff)
@@ -1254,6 +1313,7 @@ vst2::IntPtr processEvents(WrapperState& wrapper, const vst2::Events* events)
                                         wrapper, wrapper.sgTimelineFrames);
                                     wrapper.vlSetupHistoryFrozen = true;
                                 } else if (allocation.reassigned) {
+                                    voice.heldNotes.clear();
                                     replayVlSysexSetup(wrapper, voiceIndex,
                                                        channel);
                                     queueVl(wrapper, voice, midi->deltaFrames,
@@ -1269,6 +1329,10 @@ vst2::IntPtr processEvents(WrapperState& wrapper, const vst2::Events* events)
                                 }
                                 queueVl(wrapper, voice, midi->deltaFrames,
                                         nativePacked);
+                                voice.heldNotes.noteOn(
+                                    midiNote(packed),
+                                    static_cast<std::uint8_t>(
+                                        (packed >> 16) & 0x7f));
                                 }
                             }
                         } else if (isNoteOff(packed)) {
@@ -1281,10 +1345,31 @@ vst2::IntPtr processEvents(WrapperState& wrapper, const vst2::Events* events)
                                         wrapper.vlVoiceAllocator
                                             .hasExplicitConfiguration(),
                                         channel);
-                                queueVl(wrapper, wrapper.vlVoices[voiceIndex],
-                                        midi->deltaFrames,
+                                auto& voice = wrapper.vlVoices[voiceIndex];
+                                queueVl(wrapper, voice, midi->deltaFrames,
                                         hybrid::remapVlShortMessage(
                                             packed, nativeChannel));
+                                const auto resume = voice.heldNotes.noteOff(
+                                    midiNote(packed),
+                                    [&](std::uint8_t held) {
+                                        return wrapper.vlVoiceAllocator.holds(
+                                            voiceIndex, held);
+                                    });
+                                if (resume) {
+                                    const std::uint32_t base = nativeChannel
+                                        | (static_cast<std::uint32_t>(
+                                               resume->note) << 8);
+                                    queueVl(wrapper, voice, midi->deltaFrames,
+                                            0x80u | base);
+                                    queueVl(wrapper, voice, midi->deltaFrames,
+                                            0x90u | base
+                                                | (static_cast<std::uint32_t>(
+                                                       resume->velocity != 0
+                                                           ? resume->velocity
+                                                           : 64u) << 16));
+                                }
+                                if (!wrapper.vlVoiceAllocator.active(voiceIndex))
+                                    voice.heldNotes.clear();
                             }
                         } else {
                             bool delivered = false;
@@ -1312,8 +1397,16 @@ vst2::IntPtr processEvents(WrapperState& wrapper, const vst2::Events* events)
                                 wrapper.vlSetupHistoryFrozen = true;
                             }
                         }
-                        if (clearsHeldNotes(packed))
+                        if (clearsHeldNotes(packed)) {
                             wrapper.vlVoiceAllocator.releaseChannel(channel);
+                            for (std::uint8_t index = 0;
+                                 index < wrapper.vlVoices.size(); ++index) {
+                                if (wrapper.vlVoiceAllocator.channel(index)
+                                    == channel) {
+                                    wrapper.vlVoices[index].heldNotes.clear();
+                                }
+                            }
+                        }
                     } catch (const std::exception& error) {
                         reportVlFailure("MIDI processing failure", error.what());
                         sendToChild = true;

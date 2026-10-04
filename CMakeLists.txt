@@ -88,37 +88,55 @@ target_link_libraries(Mu2026Hybrid PRIVATE
 )
 target_link_options(Mu2026Hybrid PRIVATE -static -static-libgcc -static-libstdc++)
 
-add_executable(Mu2026VlWorker
-    NativeWorker/VlNativeWorker.cpp
-    Source/LeImageLoader.cpp
-    Source/LeImageLoader.h
-    Source/NativeVlEngine.cpp
-    Source/NativeVlEngine.h
-    Source/NativeVlProtocol.h
-)
-set_target_properties(Mu2026VlWorker PROPERTIES
-    OUTPUT_NAME "mu2026-vl-worker"
-)
-target_compile_definitions(Mu2026VlWorker PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_options(Mu2026VlWorker PRIVATE
-    -municode -static -static-libgcc "-static-libstdc++"
+include(ExternalProject)
+
+set(MU2026_WORKER_CXX_COMPILER "i686-w64-mingw32-clang++" CACHE STRING
+    "C++ compiler for the isolated native worker build")
+set(MU2026_WORKER_C_COMPILER "i686-w64-mingw32-clang" CACHE STRING
+    "C compiler for the isolated native worker build")
+
+if(IS_ABSOLUTE "${MU2026_WORKER_CXX_COMPILER}")
+    set(MU2026_WORKER_CXX "${MU2026_WORKER_CXX_COMPILER}")
+else()
+    find_program(MU2026_WORKER_CXX NAMES "${MU2026_WORKER_CXX_COMPILER}" REQUIRED)
+endif()
+if(IS_ABSOLUTE "${MU2026_WORKER_C_COMPILER}")
+    set(MU2026_WORKER_CC "${MU2026_WORKER_C_COMPILER}")
+else()
+    find_program(MU2026_WORKER_CC NAMES "${MU2026_WORKER_C_COMPILER}" REQUIRED)
+endif()
+
+set(MU2026_WORKER_BUILD_DIR "${CMAKE_BINARY_DIR}/mu2026-workers")
+set(MU2026_VL_WORKER_EXE "${MU2026_WORKER_BUILD_DIR}/mu2026-vl-worker.exe")
+set(MU2026_SG_WORKER_EXE "${MU2026_WORKER_BUILD_DIR}/mu2026-sg-worker.exe")
+
+message(STATUS "Mu2026 native worker C++ compiler: ${MU2026_WORKER_CXX}")
+message(STATUS "Mu2026 native worker C compiler:   ${MU2026_WORKER_CC}")
+
+ExternalProject_Add(mu2026_native_workers
+    SOURCE_DIR "${CMAKE_SOURCE_DIR}/NativeWorkerCMake"
+    BINARY_DIR "${MU2026_WORKER_BUILD_DIR}"
+    CMAKE_GENERATOR Ninja
+    CMAKE_ARGS
+        "-DCMAKE_BUILD_TYPE=Release"
+        "-DCMAKE_C_COMPILER=${MU2026_WORKER_CC}"
+        "-DCMAKE_CXX_COMPILER=${MU2026_WORKER_CXX}"
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release
+    INSTALL_COMMAND ""
+    TEST_COMMAND ""
+    BUILD_BYPRODUCTS "${MU2026_VL_WORKER_EXE}" "${MU2026_SG_WORKER_EXE}"
 )
 
-add_executable(Mu2026SgWorker
-    NativeWorker/SgNativeWorker.cpp
-    Source/LeImageLoader.cpp
-    Source/LeImageLoader.h
-    Source/NativeSgEngine.cpp
-    Source/NativeSgEngine.h
-    Source/NativeVlProtocol.h
-)
-set_target_properties(Mu2026SgWorker PROPERTIES
-    OUTPUT_NAME "mu2026-sg-worker"
-)
-target_compile_definitions(Mu2026SgWorker PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_options(Mu2026SgWorker PRIVATE
-    -municode -static -static-libgcc "-static-libstdc++"
-)
+set(MU2026_VL_PACKAGE_EXE "${CMAKE_BINARY_DIR}/mu2026-vl-worker.exe")
+set(MU2026_SG_PACKAGE_EXE "${CMAKE_BINARY_DIR}/mu2026-sg-worker.exe")
+add_custom_command(OUTPUT "${MU2026_VL_PACKAGE_EXE}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MU2026_VL_WORKER_EXE}" "${MU2026_VL_PACKAGE_EXE}"
+    DEPENDS mu2026_native_workers "${MU2026_VL_WORKER_EXE}")
+add_custom_command(OUTPUT "${MU2026_SG_PACKAGE_EXE}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MU2026_SG_WORKER_EXE}" "${MU2026_SG_PACKAGE_EXE}"
+    DEPENDS mu2026_native_workers "${MU2026_SG_WORKER_EXE}")
+add_custom_target(Mu2026VlWorker ALL DEPENDS "${MU2026_VL_PACKAGE_EXE}")
+add_custom_target(Mu2026SgWorker ALL DEPENDS "${MU2026_SG_PACKAGE_EXE}")
 
 add_executable(HybridHostProbe
     Tests/HybridHostProbe.cpp
@@ -169,8 +187,34 @@ target_link_options(HybridEditorHostProbe PRIVATE
     -municode -static -static-libgcc -static-libstdc++
 )
 
+add_executable(Mu2026Standalone
+    Standalone/HybridStandalone.cpp
+    Standalone/Common.h
+    Standalone/EventClock.h
+    Standalone/MidiInput.h
+    Standalone/OfflineMidi.h
+    Standalone/Vst2Host.h
+    Source/MidiPortCable.h
+    Source/Vst2Abi.h
+)
+set_target_properties(Mu2026Standalone PROPERTIES OUTPUT_NAME "mu2026-standalone")
+target_include_directories(Mu2026Standalone PRIVATE Source)
+target_compile_definitions(Mu2026Standalone PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+)
+target_link_libraries(Mu2026Standalone PRIVATE winmm)
+target_link_options(Mu2026Standalone PRIVATE -static -static-libgcc -static-libstdc++)
+
 enable_testing()
 add_test(NAME DxEngineTests COMMAND DxEngineTests)
+
+add_library(MockMuEngine SHARED Tests/MockMuEngine.cpp)
+target_link_options(MockMuEngine PRIVATE -static -static-libgcc -static-libstdc++)
+add_executable(HybridFirmwareModeProbe Tests/HybridFirmwareModeProbe.cpp)
+target_compile_definitions(HybridFirmwareModeProbe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_options(HybridFirmwareModeProbe PRIVATE -static -static-libgcc -static-libstdc++)
+add_test(NAME HybridFirmwareModeProbe COMMAND HybridFirmwareModeProbe
+    $<TARGET_FILE:Mu2026Hybrid> $<TARGET_FILE:MockMuEngine>)
 
 add_library(MockMuEngine SHARED Tests/MockMuEngine.cpp)
 target_link_options(MockMuEngine PRIVATE -static -static-libgcc -static-libstdc++)
@@ -218,6 +262,11 @@ add_executable(MidiRouterTests
 target_include_directories(MidiRouterTests PRIVATE Source)
 target_link_options(MidiRouterTests PRIVATE -static -static-libgcc -static-libstdc++)
 add_test(NAME MidiRouterTests COMMAND MidiRouterTests)
+
+add_executable(MidiPortCableTests Tests/MidiPortCableTests.cpp Source/MidiPortCable.h)
+target_include_directories(MidiPortCableTests PRIVATE Source)
+target_link_options(MidiPortCableTests PRIVATE -static -static-libgcc -static-libstdc++)
+add_test(NAME MidiPortCableTests COMMAND MidiPortCableTests)
 
 add_executable(MidiSystemResetTests
     Tests/MidiSystemResetTests.cpp
@@ -322,12 +371,24 @@ target_link_options(VlVoiceAllocatorTests PRIVATE
 )
 add_test(NAME VlVoiceAllocatorTests COMMAND VlVoiceAllocatorTests)
 
+add_executable(VlHeldNoteStackTests
+    Tests/VlHeldNoteStackTests.cpp
+    Source/VlHeldNoteStack.h
+    Source/VlVoiceAllocator.h
+)
+target_include_directories(VlHeldNoteStackTests PRIVATE Source)
+target_link_options(VlHeldNoteStackTests PRIVATE
+    -static -static-libgcc -static-libstdc++
+)
+add_test(NAME VlHeldNoteStackTests COMMAND VlHeldNoteStackTests)
+
 # These legacy tests use the C assert macro. Keep their checks active when the
 # normal release build is used for packaging and validation.
 foreach(assertion_test IN ITEMS
     MidiChannelSnapshotTests
     VlPartRouterTests
     VlVoiceAllocatorTests
+    VlHeldNoteStackTests
 )
     target_compile_options(${assertion_test} PRIVATE -UNDEBUG)
 endforeach()

@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Windows x86 build (MinGW-w64, Release)
+
+    runs-on: windows-2025
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up MSYS2 (MINGW32)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW32
+          update: true
+          suppress-deprecation-warnings: msystem-mingw32
+          install: >-
+            mingw-w64-i686-toolchain
+            mingw-w64-i686-cmake
+            mingw-w64-i686-ninja
+            git
+
+      - name: Install llvm-mingw (i686 Clang)
+        shell: pwsh
+        env:
+          LLVM_MINGW_TAG: '20260908'
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $name = "llvm-mingw-$env:LLVM_MINGW_TAG-msvcrt-x86_64"
+          $url  = "https://github.com/mstorsjo/llvm-mingw/releases/download/$env:LLVM_MINGW_TAG/$name.zip"
+          $dest = Join-Path $env:RUNNER_TEMP 'llvm-mingw'
+          $zip  = Join-Path $env:RUNNER_TEMP "$name.zip"
+
+          Invoke-WebRequest -Uri $url -OutFile $zip
+
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+
+          $bin = Join-Path $dest "$name\bin"
+
+          if (-not (Test-Path (Join-Path $bin 'i686-w64-mingw32-clang++.exe'))) {
+            throw "i686-w64-mingw32-clang++.exe not found in $bin"
+          }
+
+          "LLVM_MINGW_BIN=$bin" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify i686 Clang
+        shell: msys2 {0}
+        run: |
+          set -e
+
+          LLVM_BIN="$(cygpath -u "$LLVM_MINGW_BIN")"
+
+          "$LLVM_BIN/i686-w64-mingw32-clang++.exe" --version
+
+          cat > /tmp/worker-test.cpp <<'EOF'
+          int main() { return 0; }
+          EOF
+
+          "$LLVM_BIN/i686-w64-mingw32-clang++.exe" \
+            /tmp/worker-test.cpp \
+            -o /tmp/worker-test.exe
+
+          file /tmp/worker-test.exe
+
+          file /tmp/worker-test.exe |
+            grep -Eq 'PE32 .*Intel 80386|PE32 .*i386'
+
+      - name: Configure
+        shell: msys2 {0}
+        run: |
+          LLVM_BIN="$(cygpath -m "$LLVM_MINGW_BIN")"
+
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMU2026_WORKER_CXX_COMPILER="$LLVM_BIN/i686-w64-mingw32-clang++.exe" \
+            -DMU2026_WORKER_C_COMPILER="$LLVM_BIN/i686-w64-mingw32-clang.exe"
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          cmake --build build --parallel
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: mu2026-hybrid-x86-${{ github.sha }}
+          path: |
+            build/mu2026-hybrid.dll
+            build/mu2026-vl-worker.exe
+            build/mu2026-sg-worker.exe
+            build/mu2026-standalone.exe
+          if-no-files-found: error
+          retention-days: 14
+          

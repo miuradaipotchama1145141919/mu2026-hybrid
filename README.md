@@ -161,3 +161,22 @@ The wrapper requires a valid 4 MB `mu2000_flash.bin` in `roms` or the ROM
 directory named by `roms.txt`. The MU engine additionally requires its four
 8 MB wave ROMs. Missing or mismatched ROMs are a load failure, not a silent
 fallback to XG50.
+
+## Standalone host
+
+The standalone host loads `mu2026-hybrid.dll` and gives the MU2000 its four MIDI inputs, one input device per port. VL, SG and the 2006LE fallback only receive port A, as on the hardware.
+
+List devices and start with one device per port:
+
+    mu2026-standalone --list
+    mu2026-standalone --port0 0 --port1 1 --port2 2 --port3 3
+
+Options: `--plugin PATH`, `--out N`, `--rate 44100|48000`, `--block FRAMES`, `--buffers N`, `--verbose`.
+
+Render a MIDI file to a stereo 16-bit WAV without live audio:
+
+    mu2026-standalone --render input.mid output.wav
+
+Render options: `--seconds N`, `--block N`, `--trace-midi`, `--plugin PATH`, `--rate 44100|48000`.
+
+Inside a DAW, send `F5 nn` (nn = 1 to 4) to select MIDI IN A to D.

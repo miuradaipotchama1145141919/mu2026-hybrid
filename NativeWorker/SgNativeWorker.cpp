@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -127,13 +128,22 @@ int wmain(int argc, wchar_t** argv)
                 engine->sendShort(shared->argument);
                 break;
             }
-            case hybrid::ipc::Command::sendSysex:
+            case hybrid::ipc::Command::sendSysex: {
                 if (shared->dataSize > shared->data.size())
                     throw std::runtime_error("SG SysEx exceeds IPC capacity");
-                engine->sendSysex({shared->data.data(), shared->dataSize});
+                const std::size_t size = static_cast<std::size_t>(shared->dataSize);
+                if (size >= 6 && shared->data[0] == 0xF0 && shared->data[1] == 0x43) {
+                    std::array<std::uint8_t, hybrid::ipc::maxSysexBytes> temp {};
+                    std::memcpy(temp.data(), shared->data.data(), size);
+                    temp[5] = static_cast<std::uint8_t>(temp[5] & 0x0F);
+                    engine->sendSysex({temp.data(), size});
+                } else {
+                    engine->sendSysex({shared->data.data(), shared->dataSize});
+                }
                 if (statisticsEnabled)
                     ++statistics.sysexMessages;
                 break;
+            }
             case hybrid::ipc::Command::setSampleRate:
                 engine->setSampleRate(shared->argument);
                 break;

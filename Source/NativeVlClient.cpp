@@ -7,12 +7,30 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <filesystem>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace hybrid {
 namespace {
+
+HANDLE createKillOnCloseJob()
+{
+    const HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (job == nullptr)
+        throw std::runtime_error("cannot create VL worker job object");
+
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION info {};
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                 &info, sizeof(info))) {
+        CloseHandle(job);
+        throw std::runtime_error("cannot configure VL worker job object");
+    }
+    return job;
+}
 
 std::wstring quoted(const std::filesystem::path& path)
 {
@@ -96,6 +114,18 @@ public:
         HeapFree(GetProcessHeap(), 0, startup.lpAttributeList);
         if (!created)
             throw win32Error("cannot launch native VL worker");
+
+        job = createKillOnCloseJob();
+        if (!AssignProcessToJobObject(job, processInfo.hProcess)) {
+            const DWORD error = GetLastError();
+            TerminateProcess(processInfo.hProcess, 1);
+            CloseHandle(processInfo.hProcess);
+            CloseHandle(processInfo.hThread);
+            CloseHandle(job);
+            throw std::runtime_error("cannot assign native VL worker to job (Win32 error "
+                                    + std::to_string(error) + ")");
+        }
+
         process = processInfo.hProcess;
         CloseHandle(processInfo.hThread);
         waitForResponse("initialization", 10'000);
@@ -125,6 +155,8 @@ public:
         }
         if (process != nullptr)
             CloseHandle(process);
+        if (job != nullptr)
+            CloseHandle(job);
         if (shared != nullptr)
             UnmapViewOfFile(shared);
         if (mapping != nullptr)
@@ -134,6 +166,7 @@ public:
         if (responseEvent != nullptr)
             CloseHandle(responseEvent);
         process = nullptr;
+        job = nullptr;
         shared = nullptr;
         mapping = nullptr;
         requestEvent = nullptr;
@@ -199,6 +232,7 @@ public:
     HANDLE requestEvent {};
     HANDLE responseEvent {};
     HANDLE process {};
+    HANDLE job {};
     ipc::SharedState* shared {};
     bool unresponsive {};
     bool requestPending {};
